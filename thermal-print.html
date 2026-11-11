@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>چاپ حرارتی</title>
+<style>
+:root{--bg:#f3f5f8;--card:#fff;--tx:#14202b;--mut:#66727e;--pri:#1a56db;--ok:#16a34a;--bad:#dc2626;--bd:#d6dce3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151b;--card:#1a222b;--tx:#e8eef4;--mut:#93a0ad;--bd:#2c3846}}
+:root[data-theme="dark"]{--bg:#10151b;--card:#1a222b;--tx:#e8eef4;--mut:#93a0ad;--bd:#2c3846}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:Tahoma,"Segoe UI",sans-serif;padding:12px;max-width:520px;margin-inline:auto}
+h1{font-size:18px;margin:6px 0 12px}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px;margin-bottom:12px}
+button,select,textarea{font:inherit;color:var(--tx)}
+button{border:0;border-radius:10px;padding:12px;background:var(--pri);color:#fff;font-weight:bold;width:100%;margin-top:8px}
+button.s{background:var(--bd);color:var(--tx)}
+select,textarea,input[type=file]{width:100%;background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:10px}
+textarea{min-height:130px}
+.r{display:flex;gap:8px}.r>*{flex:1}
+#st{font-size:13px;font-weight:bold}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+.tabs{display:flex;gap:6px;margin-bottom:8px}.tabs button{margin:0;background:var(--bd);color:var(--tx)}.tabs button.on{background:var(--pri);color:#fff}
+canvas{max-width:100%;background:#fff;border:1px dashed var(--bd);border-radius:8px;margin-top:8px}
+small{color:var(--mut)}
+</style>
+</head>
+<body>
+<h1>🖨️ چاپ روی پرینتر حرارتی</h1>
+
+<div class="c">
+  <div id="st" class="bad">وصل نیست</div>
+  <button id="bc">وصل کردن پرینتر (بلوتوث)</button>
+  <div class="r" style="margin-top:8px">
+    <select id="pw"><option value="384">کاغذ ۵۸ میلی‌متر</option><option value="576">کاغذ ۸۰ میلی‌متر</option></select>
+    <select id="fs"><option value="20">نوشته ریز</option><option value="26" selected>نوشته معمولی</option><option value="36">نوشته درشت</option></select>
+  </div>
+</div>
+
+<div class="c">
+  <div class="tabs"><button id="t1" class="on">نوشته</button><button id="t2">عکس</button></div>
+  <div id="p1"><textarea id="tx" placeholder="متن را اینجا بنویس…"></textarea></div>
+  <div id="p2" hidden><input type="file" id="fi" accept="image/*"></div>
+  <canvas id="cv" width="384" height="1"></canvas>
+  <button id="bp">چاپ</button>
+  <button id="bt" class="s">چاپ آزمایشی</button>
+  <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="cut"> برش کاغذ بعد از چاپ</label>
+</div>
+
+<small>فقط در کروم اندروید کار می‌کند و پرینتر باید بلوتوث BLE داشته باشد. نشانی صفحه باید https باشد.</small>
+
+<script>
+const $=id=>document.getElementById(id);
+const SERV=[0xff00,0xffe0,0xfee7,0xae30,0x18f0,"e7810a71-73ae-499d-8c15-faa9aef0c3f2","49535343-fe7d-4ae5-8fa9-9fafd205e455","0000ffe0-0000-1000-8000-00805f9b34fb"];
+let dev=null,ch=null,mode=1,img=null;
+const W=()=>+$("pw").value;
+
+function st(t,ok){$("st").textContent=t;$("st").className=ok?"ok":"bad"}
+
+async function connect(){
+  if(!navigator.bluetooth){st("این مرورگر بلوتوث وب ندارد؛ کروم را باز کن",0);return}
+  try{
+    dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:SERV});
+    dev.addEventListener("gattserverdisconnected",()=>{ch=null;st("اتصال قطع شد",0)});
+    st("در حال وصل شدن…",0);
+    const s=await dev.gatt.connect();
+    ch=null;
+    for(const sv of await s.getPrimaryServices()){
+      for(const c of await sv.getCharacteristics()){
+        if(c.properties.writeWithoutResponse||c.properties.write){ch=c;break}
+      }
+      if(ch)break;
+    }
+    if(!ch){st("این پرینتر راه نوشتن ندارد",0);return}
+    st("وصل شد: "+(dev.name||"پرینتر"),1);
+  }catch(e){st("وصل نشد: "+(e.message||e),0)}
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function send(b){
+  for(let i=0;i<b.length;i+=100){
+    const p=b.slice(i,i+100);
+    if(ch.properties.writeWithoutResponse)await ch.writeValueWithoutResponse(p);
+    else await ch.writeValue(p);
+    await sleep(25);
+  }
+}
+
+// نوشته را روی بوم می‌کشد (برای فارسی لازم است)
+function drawText(txt){
+  const w=W(),fs=+$("fs").value,lh=Math.round(fs*1.5),cv=$("cv"),x=cv.getContext("2d");
+  x.font=fs+"px Tahoma,sans-serif";x.direction="rtl";
+  const lines=[];
+  for(const raw of txt.split("\n")){
+    let cur="";
+    for(const wd of raw.split(" ")){
+      const t=cur?cur+" "+wd:wd;
+      if(x.measureText(t).width>w-16&&cur){lines.push(cur);cur=wd}else cur=t;
+    }
+    lines.push(cur);
+  }
+  cv.width=w;cv.height=lines.length*lh+16;
+  x.fillStyle="#fff";x.fillRect(0,0,w,cv.height);
+  x.fillStyle="#000";x.font=fs+"px Tahoma,sans-serif";x.direction="rtl";x.textAlign="right";x.textBaseline="top";
+  lines.forEach((l,i)=>x.fillText(l,w-8,8+i*lh));
+}
+
+// عکس را سیاه‌وسفید می‌کند (Floyd–Steinberg)
+function drawImg(){
+  if(!img)return;
+  const w=W(),h=Math.round(img.height*w/img.width),cv=$("cv"),x=cv.getContext("2d");
+  cv.width=w;cv.height=h;
+  x.fillStyle="#fff";x.fillRect(0,0,w,h);x.drawImage(img,0,0,w,h);
+  const d=x.getImageData(0,0,w,h),a=d.data,g=new Float32Array(w*h);
+  for(let i=0;i<w*h;i++)g[i]=a[i*4]*.3+a[i*4+1]*.59+a[i*4+2]*.11;
+  for(let y=0;y<h;y++)for(let X=0;X<w;X++){
+    const i=y*w+X,o=g[i],n=o<128?0:255,e=o-n;g[i]=n;
+    if(X+1<w)g[i+1]+=e*7/16;
+    if(y+1<h){if(X>0)g[i+w-1]+=e*3/16;g[i+w]+=e*5/16;if(X+1<w)g[i+w+1]+=e/16}
+  }
+  for(let i=0;i<w*h;i++){a[i*4]=a[i*4+1]=a[i*4+2]=g[i];a[i*4+3]=255}
+  x.putImageData(d,0,0);
+}
+
+function refresh(){
+  if(mode==1)drawText($("tx").value||" ");else drawImg();
+}
+
+async function printCanvas(){
+  if(!ch){st("اول پرینتر را وصل کن",0);return}
+  const cv=$("cv"),w=cv.width,h=cv.height,a=cv.getContext("2d").getImageData(0,0,w,h).data,bw=w>>3;
+  try{
+    await send(new Uint8Array([0x1b,0x40]));
+    for(let y0=0;y0<h;y0+=96){
+      const bh=Math.min(96,h-y0),buf=new Uint8Array(8+bw*bh);
+      buf.set([0x1d,0x76,0x30,0,bw&255,bw>>8,bh&255,bh>>8]);
+      for(let y=0;y<bh;y++)for(let b=0;b<bw;b++){
+        let v=0;
+        for(let k=0;k<8;k++){
+          const p=((y0+y)*w+b*8+k)*4;
+          if(a[p]*.3+a[p+1]*.59+a[p+2]*.11<128)v|=128>>k;
+        }
+        buf[8+y*bw+b]=v;
+      }
+      await send(buf);
+    }
+    await send(new Uint8Array($("cut").checked?[0x1b,0x64,4,0x1d,0x56,0x42,0]:[0x1b,0x64,4]));
+    st("چاپ شد ✓ ("+(dev.name||"پرینتر")+")",1);
+  }catch(e){st("چاپ نشد: "+(e.message||e),0)}
+}
+
+function tab(n){
+  mode=n;
+  $("t1").className=n==1?"on":"";$("t2").className=n==2?"on":"";
+  $("p1").hidden=n!=1;$("p2").hidden=n!=2;
+  refresh();
+}
+
+$("bc").onclick=connect;
+$("bp").onclick=async()=>{refresh();await printCanvas()};
+$("bt").onclick=async()=>{drawText("تست چاپ\nسلام دنیا ۱۲۳۴۵۶\nHello 123 ✓");await printCanvas()};
+$("t1").onclick=()=>tab(1);$("t2").onclick=()=>tab(2);
+$("tx").oninput=refresh;$("pw").onchange=refresh;$("fs").onchange=refresh;
+$("fi").onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const i=new Image();i.onload=()=>{img=i;drawImg()};i.src=URL.createObjectURL(f);
+};
+refresh();
+</script>
+</body>
+</html>
